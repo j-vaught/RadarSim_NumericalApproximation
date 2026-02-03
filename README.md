@@ -2,6 +2,13 @@
 
 Analytical/statistical synthetic X-band marine radar data generation using numerical approximation methods.
 
+## Example Output
+
+| Land + Targets | Water + Targets | High Sea State |
+|:---:|:---:|:---:|
+| ![Land and targets](examples/land_and_targets.png) | ![Water targets](examples/water_targets.png) | ![High sea state](examples/high_sea_state.png) |
+| Coastline with bay, 25 targets | Open water, 35 targets | Sea state 5, different coastline |
+
 ## Overview
 
 Fast radar data generation using physics-based statistical models rather than computationally expensive ray tracing. Designed for generating large-scale training datasets for ML-based target detection.
