@@ -1,0 +1,69 @@
+# Tier 2 Analytical Simulation Configuration
+# Fast statistical radar data generation
+
+simulation:
+  num_frames: 500
+  seed: 42
+
+radar:
+  # Furuno DRS4D-NXT parameters
+  frequency_ghz: 9.41
+  peak_power_w: 25
+  antenna_height_m: 10
+  antenna_gain_db: 26
+  beamwidth_h_deg: 3.9
+  beamwidth_v_deg: 25
+  range_resolution_m: 7.5
+  num_range_bins: 868
+  num_azimuths: 720
+  prf_hz: 2000
+  pulse_width_us: 0.5
+
+environment:
+  sea_state: 4          # Douglas scale 0-7
+  wind_speed_mps: 12
+  rain_rate_mmhr: 0     # 0 = no rain
+  ducting:
+    enabled: false
+    height_m: 50
+    strength: 0.3
+
+targets:
+  # Random target ensemble
+  random:
+    count: 10
+    range_min_m: 500
+    range_max_m: 6000
+    rcs_min_m2: 1
+    rcs_max_m2: 500
+    swerling_cases: [1, 3]
+    max_speed_mps: 15
+
+  # Specific targets (optional)
+  fixed: []
+  # Example:
+  # - range_m: 2000
+  #   azimuth_deg: 45
+  #   mean_rcs_m2: 100
+  #   swerling_case: 1
+  #   class: vessel
+
+output:
+  directory: ./output
+  formats:
+    polar_csv: true
+    cartesian_png: true
+    yolo_labels: true
+    echo_trails: true
+    video: true
+
+  labels:
+    class_map:
+      vessel: 0
+      buoy: 1
+      unknown: 2
+
+noise:
+  thermal_noise: true
+  noise_figure_db: 6
+  temp_k: 290

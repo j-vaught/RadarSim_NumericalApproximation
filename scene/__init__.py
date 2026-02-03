@@ -1,0 +1,26 @@
+"""
+Scene generation: motion paths, intensity profiles, and configuration.
+"""
+
+from .config import (
+    SceneConfig,
+    ObjectGroupConfig,
+    PathConfig,
+    IntensityConfig,
+    FlickerConfig,
+    LabelConfig,
+    PlacementConfig,
+    load_scene,
+)
+from .intensity import IntensityEngine, scale_echo_data
+from .motion import generate_path, safe_eval, eval_speed, resolve_position
+
+__all__ = [
+    # config
+    'SceneConfig', 'ObjectGroupConfig', 'PathConfig', 'IntensityConfig',
+    'FlickerConfig', 'LabelConfig', 'PlacementConfig', 'load_scene',
+    # intensity
+    'IntensityEngine', 'scale_echo_data',
+    # motion
+    'generate_path', 'safe_eval', 'eval_speed', 'resolve_position',
+]
