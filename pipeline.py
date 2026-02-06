@@ -25,10 +25,7 @@ from .core import (
     RadarConverter,
     ConversionConfig,
     radians_to_ticks,
-    BinaryMask,
     PolarMask,
-    AnnotationSet,
-    create_water_mask,
 )
 
 # Statistical models
@@ -48,6 +45,9 @@ from .models import (
 # Scene system
 from .scene import SceneConfig, SceneAdapter, load_scene
 
+# Land / background loading
+from .land_loader import LandLoader, LandLoadResult
+
 
 @dataclass
 class Tier2Config:
@@ -60,6 +60,7 @@ class Tier2Config:
     rain_rate_mmhr: float = 0.0
     land_enabled: bool = False
     land_config: Optional[LandConfig] = None
+    render_mode: str = "auto"  # "radar_equation" | "max_blend" | "auto"
 
     # Output
     output_dir: Path = Path("output")
@@ -134,6 +135,14 @@ class Tier2Config:
                 bay_depth=env.land.bay_depth,
             )
 
+        # Resolve render_mode: "auto" picks based on land type
+        render_mode = env.render_mode
+        if render_mode == "auto":
+            if land_enabled and env.land.type == "frames":
+                render_mode = "max_blend"
+            else:
+                render_mode = "radar_equation"
+
         return cls(
             num_frames=scene_config.count,
             seed=scene_config.seed,
@@ -141,6 +150,7 @@ class Tier2Config:
             rain_rate_mmhr=env.rain_rate_mmhr,
             land_enabled=land_enabled,
             land_config=land_config,
+            render_mode=render_mode,
         )
 
 
@@ -426,68 +436,6 @@ class Tier2Pipeline:
 
         print("Done!")
 
-    def _load_annotation_water_mask(self, annotation_path: str, scene_path: Path) -> PolarMask:
-        """Load annotation.json and return a polar water mask (True = water)."""
-        from pathlib import Path as P
-        ann_path = P(annotation_path)
-        if not ann_path.is_absolute():
-            ann_path = (scene_path.parent / ann_path).resolve()
-
-        annotations = AnnotationSet.load(str(ann_path))
-        img_size = self.converter.config.image_size
-        water_mask_cart = create_water_mask(annotations, img_size, img_size)
-        return PolarMask.from_cartesian(water_mask_cart, self.converter)
-
-    def _load_annotation_land_mask(self, annotation_path: str, scene_path: Path) -> np.ndarray:
-        """Load annotation.json and convert to polar land mask."""
-        from pathlib import Path as P
-        ann_path = P(annotation_path)
-        if not ann_path.is_absolute():
-            ann_path = (scene_path.parent / ann_path).resolve()
-
-        annotations = AnnotationSet.load(str(ann_path))
-
-        # Create water mask in Cartesian space (same size as converter image)
-        img_size = self.converter.config.image_size
-        water_mask_cart = create_water_mask(annotations, img_size, img_size)
-
-        # Convert to polar
-        polar_water = PolarMask.from_cartesian(water_mask_cart, self.converter)
-
-        # Invert: water mask -> land mask (True where land)
-        land_mask = ~polar_water.data
-
-        return land_mask
-
-    def _load_png_land_mask(self, mask_path: str, scene_path: Path) -> np.ndarray:
-        """Load a PNG water mask and convert to polar land mask."""
-        from pathlib import Path as P
-        from PIL import Image
-
-        mp = P(mask_path)
-        if not mp.is_absolute():
-            mp = (scene_path.parent / mp).resolve()
-
-        img = np.array(Image.open(str(mp)).convert('L'))
-        # Threshold: white = water (True), black = land (False)
-        water_cart = img > 127
-
-        img_size = self.converter.config.image_size
-        # Resize if needed
-        if water_cart.shape[0] != img_size or water_cart.shape[1] != img_size:
-            from PIL import Image as PILImage
-            resized = PILImage.fromarray(water_cart.astype(np.uint8) * 255).resize(
-                (img_size, img_size), PILImage.NEAREST
-            )
-            water_cart = np.array(resized) > 127
-
-        cart_mask = BinaryMask(img_size, img_size)
-        cart_mask.data = water_cart
-        polar_water = PolarMask.from_cartesian(cart_mask, self.converter)
-        land_mask = ~polar_water.data
-
-        return land_mask
-
     def generate_scene_frame(self, adapter: SceneAdapter,
                              frame_idx: int, scan_index: int) -> tuple:
         """Generate one radar frame driven by a SceneAdapter."""
@@ -528,37 +476,6 @@ class Tier2Pipeline:
         frame_quantized = (frame_quantized * 17).astype(np.uint8)
 
         return frame_quantized, labels
-
-    def _load_land_frames(self, land_frames_dir: str, scene_path: Path) -> List[np.ndarray]:
-        """Load real radar CSV land frames as uint8 arrays."""
-        from pathlib import Path as P
-        frames_dir = P(land_frames_dir)
-        if not frames_dir.is_absolute():
-            frames_dir = (scene_path.parent / frames_dir).resolve()
-
-        csv_files = sorted(frames_dir.glob("*.csv"))
-        if not csv_files:
-            raise FileNotFoundError(f"No CSV files found in {frames_dir}")
-
-        land_frames = []
-        for csv_path in csv_files:
-            frame = RadarCSVHandler.read_csv_uncached(str(csv_path))
-            arr = frame.to_regularized_array(self.radar.samples_per_revolution)
-            land_frames.append(arr)
-
-        print(f"Loaded {len(land_frames)} land frames from {frames_dir}")
-        return land_frames
-
-    def _build_water_mask_from_land_frames(self, land_frames: List[np.ndarray]) -> PolarMask:
-        """Build a water mask by finding pixels that are zero across all land frames."""
-        # Stack and check: water = always zero across all frames
-        stacked = np.stack(land_frames, axis=0)  # (N, pulses, bins)
-        max_vals = stacked.max(axis=0)            # (pulses, bins)
-        # Water = where max intensity is below threshold (consistently empty)
-        water_data = max_vals < 5
-        mask = PolarMask(self.radar.samples_per_revolution, fill=False)
-        mask.data = water_data
-        return mask
 
     def generate_land_frame(self, land_frames: List[np.ndarray],
                             frame_idx: int, adapter: SceneAdapter,
@@ -645,50 +562,21 @@ class Tier2Pipeline:
     def run_scene(self, scene_config: SceneConfig, scene_path: Path):
         """Run simulation driven by a scene YAML file."""
         env = scene_config.environment
-        land_frames = None
 
-        # Handle land loading based on type
+        # Load land data via LandLoader (replaces inline if/elif chain)
         if env.land is not None:
-            land_type = env.land.type
-
-            if land_type == "parametric":
-                # Already handled by Tier2Config.from_scene -> __init__
-                pass
-            elif land_type == "annotation":
-                land_mask = self._load_annotation_land_mask(
-                    env.land.annotation_path, scene_path)
-                land_cfg = LandConfig(intensity=env.land.intensity)
-                self.land_generator = LandGenerator(land_cfg)
-                self.land_generator.set_azimuth_bounds_from_mask(land_mask)
-                self.land_mask = land_mask
-                self._land_full_depth = True
-            elif land_type == "mask":
-                land_mask = self._load_png_land_mask(
-                    env.land.mask_path, scene_path)
-                land_cfg = LandConfig(intensity=env.land.intensity)
-                self.land_generator = LandGenerator(land_cfg)
-                self.land_generator.set_azimuth_bounds_from_mask(land_mask)
-                self.land_mask = land_mask
-                self._land_full_depth = True
-            elif land_type == "frames":
-                land_frames = self._load_land_frames(
-                    env.land.land_frames_dir, scene_path)
-
-        # Build water mask for the adapter
-        num_pulses = self.radar.samples_per_revolution
-        num_bins = self.radar.num_range_bins
-        if land_frames is not None and env.land.annotation_path:
-            # Use annotation for precise water mask (preferred for frames mode)
-            water_polar = self._load_annotation_water_mask(
-                env.land.annotation_path, scene_path)
-            print(f"Water mask from annotation: {np.sum(water_polar.data)}/{water_polar.data.size} water pixels "
-                  f"({100*np.sum(water_polar.data)/water_polar.data.size:.1f}%)")
-        elif land_frames is not None:
-            water_polar = self._build_water_mask_from_land_frames(land_frames)
-        elif self.land_mask is not None:
-            water_polar = PolarMask(num_pulses, fill=True)
-            water_polar.data = ~self.land_mask
+            result = LandLoader.load(env.land, scene_path, self.converter, self.radar)
+            if result.land_mask is not None:
+                self.land_mask = result.land_mask
+                self._land_full_depth = result.full_depth
+            if result.land_generator is not None:
+                self.land_generator = result.land_generator
+            land_frames = result.land_frames
+            water_polar = result.water_mask
         else:
+            land_frames = None
+            num_pulses = self.radar.samples_per_revolution
+            num_bins = self.radar.num_range_bins
             water_polar = PolarMask(num_pulses, fill=True)
             water_polar.data = np.ones((num_pulses, num_bins), dtype=bool)
 
@@ -699,10 +587,11 @@ class Tier2Pipeline:
 
         self.config.output_dir.mkdir(parents=True, exist_ok=True)
         total = scene_config.count
-        print(f"Generating {total} scene frames to {self.config.output_dir}")
+        render = self.config.render_mode
+        print(f"Generating {total} scene frames to {self.config.output_dir} (render_mode={render})")
 
         for i in range(total):
-            if land_frames is not None:
+            if render == "max_blend" and land_frames is not None:
                 frame, labels = self.generate_land_frame(
                     land_frames, i, adapter, scan_index=i)
             else:

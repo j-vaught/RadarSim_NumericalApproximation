@@ -42,6 +42,7 @@ class EnvironmentConfig:
     rain_rate_mmhr: float = 0.0
     ducting: DuctingConfig = field(default_factory=DuctingConfig)
     land: Optional[LandSceneConfig] = None
+    render_mode: str = "auto"  # "radar_equation" | "max_blend" | "auto"
 
 
 @dataclass
@@ -164,6 +165,7 @@ def _parse_environment(d: Optional[Dict]) -> EnvironmentConfig:
         rain_rate_mmhr=float(d.get("rain_rate_mmhr", 0.0)),
         ducting=_parse_ducting(d.get("ducting")),
         land=_parse_land_scene(d.get("land")),
+        render_mode=str(d.get("render_mode", "auto")),
     )
 
 
