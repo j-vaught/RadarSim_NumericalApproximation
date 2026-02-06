@@ -596,9 +596,11 @@ class Tier2Pipeline:
         az_bin = self.radar.azimuth_to_spoke(az_deg)
 
         # Scale target brightness based on RCS — map to uint8 range
-        # Larger RCS = brighter blob
-        base_brightness = min(252, max(80, int(40 * np.log10(rcs + 1) + 100)))
-        brightness = int(base_brightness * intensity_scale)
+        # Must be bright enough to stand out against land returns (up to 252)
+        base_brightness = min(252, max(230, int(15 * np.log10(rcs + 1) + 235)))
+        # Clamp intensity_scale so targets always remain visible
+        effective_scale = max(0.85, intensity_scale)
+        brightness = max(220, min(252, int(base_brightness * effective_scale)))
 
         # Blob size from RCS
         min_blob = 4
@@ -619,7 +621,7 @@ class Tier2Pipeline:
                 if dist_sq > 1.0:
                     continue
 
-                weight = np.exp(-2.0 * dist_sq) * (0.5 + 0.5 * np.random.random())
+                weight = np.exp(-0.8 * dist_sq) * (0.85 + 0.15 * np.random.random())
                 pixel_val = int(brightness * weight)
 
                 ai = (az_bin + da) % self.radar.samples_per_revolution
