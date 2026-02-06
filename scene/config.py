@@ -15,7 +15,7 @@ class DuctingConfig:
 @dataclass
 class LandSceneConfig:
     """Land configuration within the scene environment block."""
-    type: str = "parametric"          # "parametric" | "annotation" | "mask"
+    type: str = "parametric"          # "parametric" | "annotation" | "mask" | "frames"
     # Parametric options (existing Tier2 approach)
     coastline_range: float = 0.6
     land_start_az: float = 30.0
@@ -30,6 +30,8 @@ class LandSceneConfig:
     annotation_path: str = ""
     # Mask option
     mask_path: str = ""
+    # Frames option (real radar CSV backgrounds, like Tier3 land_frames/)
+    land_frames_dir: str = ""
 
 
 @dataclass
@@ -149,6 +151,7 @@ def _parse_land_scene(d: Optional[Dict]) -> Optional[LandSceneConfig]:
         bay_depth=float(d.get("bay_depth", 0.15)),
         annotation_path=str(d.get("annotation_path", "")),
         mask_path=str(d.get("mask_path", "")),
+        land_frames_dir=str(d.get("land_frames_dir", "")),
     )
 
 

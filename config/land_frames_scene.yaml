@@ -1,0 +1,81 @@
+# Scene YAML using real radar land frames as backgrounds (Tier3 style)
+seed: 42
+count: 200
+
+environment:
+  sea_state: 4
+  wind_speed_mps: 12
+  rain_rate_mmhr: 0
+  land:
+    type: frames
+    land_frames_dir: ../../Tier3/radar-scene-augmentation/data/land_frames
+
+objects:
+  - name: cargo_vessel
+    count: 2
+    size: large
+    physics:
+      rcs_m2: [200, 800]
+      swerling_case: 1
+      target_class: vessel
+      target_height_m: 8.0
+    intensity:
+      base: 1.2
+      variability: 0.15
+      profile: constant
+    path:
+      type: linear
+      start: edge
+      heading: 45
+      speed: 0.8
+      duration: [0.5, 0.9]
+
+  - name: small_boat
+    count: 5
+    size: small
+    physics:
+      rcs_m2: [1, 10]
+      swerling_case: 3
+      target_class: vessel
+      target_height_m: 2.0
+    intensity:
+      base: 0.8
+      variability: 0.2
+      profile: sine
+      period: 40
+      amplitude: 0.3
+    flicker:
+      enabled: true
+      rate: 0.3
+      primary_frames: [15, 50]
+      flicker_frames: [2, 6]
+      intensity_drop: 0.3
+    path:
+      type: bezier
+      start: edge
+      end: edge
+      speed: 1.5
+      curvature: 0.4
+      duration: [0.3, 0.7]
+
+  - name: navigation_buoy
+    count: 3
+    size: small
+    physics:
+      rcs_m2: 1.0
+      swerling_case: 0
+      target_class: buoy
+      target_height_m: 1.5
+    intensity:
+      base: 0.6
+      variability: 0.05
+      profile: constant
+    path:
+      type: fixed
+      position: random
+
+labels:
+  export: true
+  class_map:
+    vessel: 0
+    buoy: 1

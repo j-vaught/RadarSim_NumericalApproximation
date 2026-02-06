@@ -517,9 +517,121 @@ class Tier2Pipeline:
 
         return frame_quantized, labels
 
+    def _load_land_frames(self, land_frames_dir: str, scene_path: Path) -> List[np.ndarray]:
+        """Load real radar CSV land frames as uint8 arrays."""
+        from pathlib import Path as P
+        frames_dir = P(land_frames_dir)
+        if not frames_dir.is_absolute():
+            frames_dir = (scene_path.parent / frames_dir).resolve()
+
+        csv_files = sorted(frames_dir.glob("*.csv"))
+        if not csv_files:
+            raise FileNotFoundError(f"No CSV files found in {frames_dir}")
+
+        land_frames = []
+        for csv_path in csv_files:
+            frame = RadarCSVHandler.read_csv_uncached(str(csv_path))
+            arr = frame.to_regularized_array(self.radar.samples_per_revolution)
+            land_frames.append(arr)
+
+        print(f"Loaded {len(land_frames)} land frames from {frames_dir}")
+        return land_frames
+
+    def _build_water_mask_from_land_frames(self, land_frames: List[np.ndarray]) -> PolarMask:
+        """Build a water mask by finding pixels that are zero across all land frames."""
+        # Stack and check: water = always zero across all frames
+        stacked = np.stack(land_frames, axis=0)  # (N, pulses, bins)
+        max_vals = stacked.max(axis=0)            # (pulses, bins)
+        # Water = where max intensity is below threshold (consistently empty)
+        water_data = max_vals < 5
+        mask = PolarMask(self.radar.samples_per_revolution, fill=False)
+        mask.data = water_data
+        return mask
+
+    def generate_land_frame(self, land_frames: List[np.ndarray],
+                            frame_idx: int, adapter: SceneAdapter,
+                            scan_index: int) -> tuple:
+        """Generate one radar frame using a real land frame as background."""
+        # Cycle through land frames
+        bg = land_frames[frame_idx % len(land_frames)].copy().astype(np.float32)
+
+        labels = []
+        time_s = frame_idx * self.radar.rotation_period
+
+        for target, intensity_scale in adapter.get_targets_for_frame(frame_idx):
+            # For land-frame mode, add targets via max-blending (like Tier3)
+            label = self._add_target_to_land_frame(
+                bg, target, time_s, scan_index, intensity_scale)
+            if label is not None:
+                labels.append(label)
+
+        # Already uint8 data — just clamp
+        frame_quantized = np.clip(bg, 0, 255).astype(np.uint8)
+        return frame_quantized, labels
+
+    def _add_target_to_land_frame(self, frame: np.ndarray, target: PointTarget,
+                                   time_s: float, scan_index: int,
+                                   intensity_scale: float = 1.0) -> Optional[Dict[str, Any]]:
+        """Add a target to a real land frame using max-blending (Tier3 style)."""
+        range_m, az_deg, _ = target.get_position(time_s)
+
+        if range_m < 0 or range_m > self.radar.max_range:
+            return None
+
+        rcs = target.get_rcs(num_pulses=1, scan_index=scan_index)[0]
+
+        range_bin = self.radar.range_to_bin(range_m)
+        az_bin = self.radar.azimuth_to_spoke(az_deg)
+
+        # Scale target brightness based on RCS — map to uint8 range
+        # Larger RCS = brighter blob
+        base_brightness = min(252, max(80, int(40 * np.log10(rcs + 1) + 100)))
+        brightness = int(base_brightness * intensity_scale)
+
+        # Blob size from RCS
+        min_blob = 4
+        base_size = max(min_blob, int(np.sqrt(rcs) * 1.2)) + np.random.randint(0, 3)
+
+        range_norm = range_bin / self.radar.num_range_bins
+        az_scale = max(0.4, 1.0 - range_norm * 0.6)
+
+        blob_size_r = base_size + np.random.randint(0, 4)
+        blob_size_az = max(2, int(base_size * az_scale))
+
+        for da in range(-blob_size_az - 1, blob_size_az + 2):
+            for dr in range(-blob_size_r - 1, blob_size_r + 2):
+                az_radius = blob_size_az * (0.8 + 0.4 * np.random.random())
+                r_radius = blob_size_r * (0.8 + 0.4 * np.random.random())
+
+                dist_sq = (da / max(az_radius, 0.5))**2 + (dr / max(r_radius, 0.5))**2
+                if dist_sq > 1.0:
+                    continue
+
+                weight = np.exp(-2.0 * dist_sq) * (0.5 + 0.5 * np.random.random())
+                pixel_val = int(brightness * weight)
+
+                ai = (az_bin + da) % self.radar.samples_per_revolution
+                ri = range_bin + dr
+
+                if 0 <= ri < self.radar.num_range_bins:
+                    # Max-blend: take the brighter of background or target
+                    frame[ai, ri] = max(frame[ai, ri], pixel_val)
+
+        return {
+            'target_id': target.target_id,
+            'class': target.target_class,
+            'range_m': range_m,
+            'azimuth_deg': az_deg,
+            'range_bin': range_bin,
+            'azimuth_bin': az_bin,
+            'rcs_m2': rcs,
+            'intensity': brightness,
+        }
+
     def run_scene(self, scene_config: SceneConfig, scene_path: Path):
         """Run simulation driven by a scene YAML file."""
         env = scene_config.environment
+        land_frames = None
 
         # Handle land loading based on type
         if env.land is not None:
@@ -544,14 +656,20 @@ class Tier2Pipeline:
                 self.land_generator.set_azimuth_bounds_from_mask(land_mask)
                 self.land_mask = land_mask
                 self._land_full_depth = True
+            elif land_type == "frames":
+                land_frames = self._load_land_frames(
+                    env.land.land_frames_dir, scene_path)
 
-        # Build water mask for the adapter (inverse of land mask)
+        # Build water mask for the adapter
         num_pulses = self.radar.samples_per_revolution
         num_bins = self.radar.num_range_bins
-        water_polar = PolarMask(num_pulses, fill=True)
-        if self.land_mask is not None:
+        if land_frames is not None:
+            water_polar = self._build_water_mask_from_land_frames(land_frames)
+        elif self.land_mask is not None:
+            water_polar = PolarMask(num_pulses, fill=True)
             water_polar.data = ~self.land_mask
         else:
+            water_polar = PolarMask(num_pulses, fill=True)
             water_polar.data = np.ones((num_pulses, num_bins), dtype=bool)
 
         # Build scene adapter
@@ -564,7 +682,11 @@ class Tier2Pipeline:
         print(f"Generating {total} scene frames to {self.config.output_dir}")
 
         for i in range(total):
-            frame, labels = self.generate_scene_frame(adapter, i, scan_index=i)
+            if land_frames is not None:
+                frame, labels = self.generate_land_frame(
+                    land_frames, i, adapter, scan_index=i)
+            else:
+                frame, labels = self.generate_scene_frame(adapter, i, scan_index=i)
             self.write_outputs(frame, labels, i)
 
             if (i + 1) % 50 == 0:
