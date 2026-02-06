@@ -174,13 +174,17 @@ class LandGenerator:
         return coastline
 
     def generate_land_returns(self, land_mask: np.ndarray,
-                               base_intensity: float = 1e-6) -> np.ndarray:
+                               base_intensity: float = 1e-6,
+                               full_depth: bool = False) -> np.ndarray:
         """
-        Generate radar returns from land - solid bright like target blobs.
+        Generate radar returns from land.
 
         Args:
             land_mask: Boolean mask of land positions
             base_intensity: Base intensity for land returns
+            full_depth: If True, render all land pixels with range-based
+                        falloff instead of a hard shadow depth cutoff.
+                        Use for annotation/mask-sourced land geometry.
 
         Returns:
             Intensity array for land returns
@@ -193,52 +197,81 @@ class LandGenerator:
 
         land_intensity = base_intensity * cfg.intensity
 
-        # Generate blobby shadow edge variation (not straight)
-        base_depth = np.random.randint(90, 130)
+        if full_depth:
+            # Render all land pixels; intensity falls off with depth from
+            # the coastline edge to simulate radar shadow / attenuation.
 
-        # Multiple scales of variation for organic look
-        depth_variation = np.zeros(num_az)
-        for scale in [60, 30, 15]:
-            freq = num_az / scale
-            phase = np.random.random() * 2 * np.pi
-            amp = 20 * (scale / 60)
-            depth_variation += amp * np.sin(np.linspace(0, freq * 2 * np.pi, num_az) + phase)
+            # Per-azimuth speckle texture (multi-scale noise)
+            texture = np.ones((num_az, num_range), dtype=float)
+            for scale in [3, 8, 20]:
+                noise = np.random.randn(num_az, num_range) * 0.15
+                texture += gaussian_filter(noise, sigma=(scale, scale * 0.8))
+            texture = np.clip(texture, 0.3, 1.5)
 
-        # Add some blobby bumps to shadow edge
-        num_bumps = np.random.randint(4, 10)
-        for _ in range(num_bumps):
-            center = np.random.randint(0, num_az)
-            width = np.random.randint(15, 50)
-            height = np.random.randn() * 25
-            bump = height * np.exp(-0.5 * ((np.arange(num_az) - center) / width) ** 2)
-            depth_variation += bump
+            for az in range(num_az):
+                land_bins = np.where(land_mask[az, :])[0]
+                if len(land_bins) == 0:
+                    continue
 
-        depth_variation = gaussian_filter(depth_variation, sigma=8)
-        visible_depths = (base_depth + depth_variation).astype(int)
-        visible_depths = np.clip(visible_depths, 60, 180)
+                az_deg = az / num_az * 360
+                az_fade = self._get_azimuth_fade(az_deg)
+                if az_fade <= 0:
+                    continue
 
-        # Fill visible land with solid intensity, fading at azimuthal edges
-        for az in range(num_az):
-            land_bins = np.where(land_mask[az, :])[0]
-            if len(land_bins) == 0:
-                continue
+                # First land bin = coastline edge at this azimuth
+                coast_bin = land_bins[0]
 
-            az_deg = az / num_az * 360
-            az_fade = self._get_azimuth_fade(az_deg)
-
-            if az_fade <= 0:
-                continue
-
-            # Reduce visible depth at azimuthal edges (land tapers off)
-            effective_depth = int(visible_depths[az] * az_fade)
-
-            for i, r_bin in enumerate(land_bins):
-                if i < effective_depth:
-                    # Also fade intensity at edges
-                    intensity = land_intensity * (0.5 + 0.5 * az_fade)
+                for r_bin in land_bins:
+                    depth = r_bin - coast_bin
+                    # Bright near coastline, gradual falloff deeper inland
+                    # Exponential decay with long tail so interior still visible
+                    depth_fade = 0.25 + 0.75 * np.exp(-depth / 120.0)
+                    intensity = (land_intensity * az_fade * depth_fade
+                                 * texture[az, r_bin])
                     returns[az, r_bin] = intensity
+        else:
+            # Original depth-limited rendering for parametric coastlines
+            base_depth = np.random.randint(90, 130)
 
-        # Light blur for soft edges - same style as targets
+            depth_variation = np.zeros(num_az)
+            for scale in [60, 30, 15]:
+                freq = num_az / scale
+                phase = np.random.random() * 2 * np.pi
+                amp = 20 * (scale / 60)
+                depth_variation += amp * np.sin(
+                    np.linspace(0, freq * 2 * np.pi, num_az) + phase)
+
+            num_bumps = np.random.randint(4, 10)
+            for _ in range(num_bumps):
+                center = np.random.randint(0, num_az)
+                width = np.random.randint(15, 50)
+                height = np.random.randn() * 25
+                bump = height * np.exp(
+                    -0.5 * ((np.arange(num_az) - center) / width) ** 2)
+                depth_variation += bump
+
+            depth_variation = gaussian_filter(depth_variation, sigma=8)
+            visible_depths = (base_depth + depth_variation).astype(int)
+            visible_depths = np.clip(visible_depths, 60, 180)
+
+            for az in range(num_az):
+                land_bins = np.where(land_mask[az, :])[0]
+                if len(land_bins) == 0:
+                    continue
+
+                az_deg = az / num_az * 360
+                az_fade = self._get_azimuth_fade(az_deg)
+                if az_fade <= 0:
+                    continue
+
+                effective_depth = int(visible_depths[az] * az_fade)
+
+                for i, r_bin in enumerate(land_bins):
+                    if i < effective_depth:
+                        intensity = land_intensity * (0.5 + 0.5 * az_fade)
+                        returns[az, r_bin] = intensity
+
+        # Light blur for soft edges
         returns = gaussian_filter(returns, sigma=(1.0, 1.2))
 
         return returns

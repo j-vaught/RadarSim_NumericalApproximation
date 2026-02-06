@@ -177,6 +177,7 @@ class Tier2Pipeline:
         # Land mask (if enabled)
         self.land_mask = None
         self.land_generator = None
+        self._land_full_depth = False  # True for annotation/mask land sources
         if config.land_enabled:
             land_cfg = config.land_config or LandConfig()
             self.land_generator = LandGenerator(land_cfg)
@@ -305,7 +306,8 @@ class Tier2Pipeline:
 
         returns = self.land_generator.generate_land_returns(
             self.land_mask,
-            base_intensity=5e-4  # Maximum brightness land returns
+            base_intensity=5e-4,  # Maximum brightness land returns
+            full_depth=self._land_full_depth,
         )
         return returns
 
@@ -492,9 +494,20 @@ class Tier2Pipeline:
             if label is not None:
                 labels.append(label)
 
-        # Convert to uint8 with 4-bit quantization (same as generate_frame)
+        # Convert to uint8 with 4-bit quantization
         frame_db = 10 * np.log10(frame + 1e-20)
-        noise_floor = np.percentile(frame_db, 85)
+
+        # Compute noise floor from water pixels only (if land mask present)
+        # so land-dominant frames don't shift the dynamic range
+        if self.land_mask is not None:
+            water_pixels = frame_db[~self.land_mask]
+            if water_pixels.size > 0:
+                noise_floor = np.percentile(water_pixels, 85)
+            else:
+                noise_floor = np.percentile(frame_db, 85)
+        else:
+            noise_floor = np.percentile(frame_db, 85)
+
         db_min = noise_floor
         db_max = noise_floor + 25
 
@@ -518,11 +531,11 @@ class Tier2Pipeline:
             elif land_type == "annotation":
                 land_mask = self._load_annotation_land_mask(
                     env.land.annotation_path, scene_path)
-                # Build a LandGenerator with default config for statistical rendering
                 land_cfg = LandConfig(intensity=env.land.intensity)
                 self.land_generator = LandGenerator(land_cfg)
                 self.land_generator.set_azimuth_bounds_from_mask(land_mask)
                 self.land_mask = land_mask
+                self._land_full_depth = True
             elif land_type == "mask":
                 land_mask = self._load_png_land_mask(
                     env.land.mask_path, scene_path)
@@ -530,6 +543,7 @@ class Tier2Pipeline:
                 self.land_generator = LandGenerator(land_cfg)
                 self.land_generator.set_azimuth_bounds_from_mask(land_mask)
                 self.land_mask = land_mask
+                self._land_full_depth = True
 
         # Build water mask for the adapter (inverse of land mask)
         num_pulses = self.radar.samples_per_revolution
