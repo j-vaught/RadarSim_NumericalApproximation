@@ -9,6 +9,7 @@ environment:
   land:
     type: frames
     land_frames_dir: ../../Tier3/radar-scene-augmentation/data/land_frames
+    annotation_path: ../../Tier3/radar-scene-augmentation/data/annotation.json
 
 objects:
   - name: cargo_vessel

@@ -426,6 +426,18 @@ class Tier2Pipeline:
 
         print("Done!")
 
+    def _load_annotation_water_mask(self, annotation_path: str, scene_path: Path) -> PolarMask:
+        """Load annotation.json and return a polar water mask (True = water)."""
+        from pathlib import Path as P
+        ann_path = P(annotation_path)
+        if not ann_path.is_absolute():
+            ann_path = (scene_path.parent / ann_path).resolve()
+
+        annotations = AnnotationSet.load(str(ann_path))
+        img_size = self.converter.config.image_size
+        water_mask_cart = create_water_mask(annotations, img_size, img_size)
+        return PolarMask.from_cartesian(water_mask_cart, self.converter)
+
     def _load_annotation_land_mask(self, annotation_path: str, scene_path: Path) -> np.ndarray:
         """Load annotation.json and convert to polar land mask."""
         from pathlib import Path as P
@@ -663,7 +675,13 @@ class Tier2Pipeline:
         # Build water mask for the adapter
         num_pulses = self.radar.samples_per_revolution
         num_bins = self.radar.num_range_bins
-        if land_frames is not None:
+        if land_frames is not None and env.land.annotation_path:
+            # Use annotation for precise water mask (preferred for frames mode)
+            water_polar = self._load_annotation_water_mask(
+                env.land.annotation_path, scene_path)
+            print(f"Water mask from annotation: {np.sum(water_polar.data)}/{water_polar.data.size} water pixels "
+                  f"({100*np.sum(water_polar.data)/water_polar.data.size:.1f}%)")
+        elif land_frames is not None:
             water_polar = self._build_water_mask_from_land_frames(land_frames)
         elif self.land_mask is not None:
             water_polar = PolarMask(num_pulses, fill=True)

@@ -90,30 +90,49 @@ class SceneAdapter:
 
     def _build_positions(self):
         """Extract valid water positions and edge positions from the water mask."""
-        num_pulses = self.water_mask.data.shape[0]
-        num_bins = self.water_mask.data.shape[1]
+        data = self.water_mask.data  # (num_pulses, num_bins) bool
+        num_pulses, num_bins = data.shape
 
-        valid = []
-        edges = []
-        for p in range(num_pulses):
-            for b in range(num_bins):
-                if self.water_mask.get(p, b):
-                    valid.append((p, b))
-                    # Check if this is an edge position (near coverage boundary
-                    # or adjacent to land)
-                    if b < 60 or b > num_bins - 60:
-                        edges.append((p, b))
-                    elif (not self.water_mask.get(p, b + 1) or
-                          not self.water_mask.get(p, b - 1)):
-                        edges.append((p, b))
+        # All water pixels as (pulse, bin) tuples
+        water_coords = np.argwhere(data)  # (N, 2) array of [pulse, bin]
 
-        if not valid:
-            # Fallback: all positions are valid (no mask constraint)
-            for p in range(0, num_pulses, 10):
-                for b in range(50, num_bins - 50, 10):
-                    valid.append((p, b))
-                    if b < 60 or b > num_bins - 60:
-                        edges.append((p, b))
+        if water_coords.size == 0:
+            # Fallback: subsample all positions
+            pp, bb = np.meshgrid(
+                np.arange(0, num_pulses, 10),
+                np.arange(50, num_bins - 50, 10), indexing='ij')
+            valid = list(map(tuple, np.column_stack([pp.ravel(), bb.ravel()])))
+            edges = [(p, b) for p, b in valid if b < 60 or b > num_bins - 60]
+            return valid, edges
+
+        # Subsample valid positions to keep memory reasonable
+        if len(water_coords) > 50000:
+            indices = self._np_rng.choice(len(water_coords), 50000, replace=False)
+            valid_arr = water_coords[indices]
+        else:
+            valid_arr = water_coords
+        valid = list(map(tuple, valid_arr))
+
+        # Edge positions: water pixels adjacent to land or near coverage boundary
+        # Shift mask in range direction to detect water/land boundaries
+        land = ~data
+        edge_mask = np.zeros_like(data)
+        edge_mask[:, :-1] |= (data[:, :-1] & land[:, 1:])   # water with land to right
+        edge_mask[:, 1:] |= (data[:, 1:] & land[:, :-1])    # water with land to left
+        # Coverage boundary edges
+        edge_mask[:, :60] |= data[:, :60]
+        edge_mask[:, -60:] |= data[:, -60:]
+
+        edge_coords = np.argwhere(edge_mask)
+        if len(edge_coords) > 10000:
+            indices = self._np_rng.choice(len(edge_coords), 10000, replace=False)
+            edge_arr = edge_coords[indices]
+        else:
+            edge_arr = edge_coords
+        edges = list(map(tuple, edge_arr))
+
+        if not edges:
+            edges = valid[:1000]
 
         return valid, edges
 
