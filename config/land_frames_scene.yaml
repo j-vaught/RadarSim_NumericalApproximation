@@ -12,8 +12,10 @@ environment:
     annotation_path: ../../Tier3/radar-scene-augmentation/data/annotation.json
 
 objects:
-  - name: cargo_vessel
-    count: 2
+  # Convoy of 3 cargo vessels with per-instance overrides:
+  # staggered spawn times, different headings and speeds
+  - name: cargo_convoy
+    count: 3
     size: large
     physics:
       rcs_m2: [200, 800]
@@ -31,6 +33,20 @@ objects:
       speed: 0.8
       duration: [0.5, 0.9]
       allow_land: true
+    instances:
+      - heading: 30
+        speed: 0.7
+        start_frame: 0
+        end_frame: 150
+      - heading: 45
+        speed: 0.8
+        start_frame: 20
+        end_frame: 170
+      - heading: 60
+        speed: 0.9
+        start_frame: 40
+        physics:
+          rcs_m2: 900
 
   - name: small_boat
     count: 5
@@ -76,6 +92,8 @@ objects:
     path:
       type: fixed
       position: random
+      start_frame: 0
+      end_frame: 200
 
 labels:
   export: true

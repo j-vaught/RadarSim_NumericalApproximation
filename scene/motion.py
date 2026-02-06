@@ -155,10 +155,37 @@ def generate_path(path_config: PathConfig, total_frames: int,
         raise ValueError(f"Unknown path type: {path_type}")
 
 
-def _compute_duration_frames(duration: List[float], total_frames: int, rng) -> Tuple[int, int]:
-    """Compute start_frame, end_frame from duration fraction spec."""
+def _compute_duration_frames(config: PathConfig, total_frames: int, rng) -> Tuple[int, int]:
+    """Compute start_frame, end_frame from PathConfig.
+
+    Priority:
+    1. Both start_frame + end_frame set → use directly (clamped to total_frames)
+    2. Only start_frame set → use duration for length, starting at start_frame
+    3. Only end_frame set → use duration for length, ending at end_frame
+    4. Neither set → original duration-based random logic
+    """
+    sf = config.start_frame
+    ef = config.end_frame
+    duration = config.duration
+
+    if sf is not None and ef is not None:
+        return max(0, sf), min(ef, total_frames)
+
+    # Compute duration-based active length
     frac = rng.uniform(duration[0], duration[1]) if len(duration) == 2 else duration[0]
     active_frames = max(1, int(total_frames * frac))
+
+    if sf is not None:
+        start = max(0, sf)
+        end = min(start + active_frames, total_frames)
+        return start, end
+
+    if ef is not None:
+        end = min(ef, total_frames)
+        start = max(0, end - active_frames)
+        return start, end
+
+    # Neither set — original random logic
     max_start = total_frames - active_frames
     start_frame = rng.randint(0, max(0, max_start))
     end_frame = min(start_frame + active_frames, total_frames)
@@ -169,8 +196,13 @@ def _path_fixed(config, total_frames, valid_positions, edge_positions,
                 water_mask, num_pulses, rng, allow_land=False):
     pos = resolve_position(config.position, valid_positions, edge_positions, rng)
     validated = _validate_point(pos[0], pos[1], water_mask, num_pulses, allow_land=True)
-    # Fixed objects always use valid_positions, so they're safe
-    # Fixed objects present for ALL frames
+    # Respect start_frame/end_frame if set, otherwise present for ALL frames
+    if config.start_frame is not None or config.end_frame is not None:
+        sf = max(0, config.start_frame or 0)
+        ef = min(config.end_frame or total_frames, total_frames)
+        active = ef - sf
+        positions = [validated] * active
+        return positions, sf, ef
     positions = [validated] * total_frames
     return positions, 0, total_frames
 
@@ -186,7 +218,7 @@ def _path_linear(config, total_frames, valid_positions, edge_positions,
             "Moving objects must start from an edge (water/land boundary or radar coverage boundary)."
         )
 
-    start_frame, end_frame = _compute_duration_frames(config.duration, total_frames, rng)
+    start_frame, end_frame = _compute_duration_frames(config, total_frames, rng)
     active_frames = end_frame - start_frame
 
     heading_rad = math.radians(config.heading)
@@ -224,7 +256,7 @@ def _path_bezier(config, total_frames, valid_positions, edge_positions,
     if not validate_edge_start(start, edge_positions, water_mask, num_pulses):
         raise ValueError(f"Bezier start {start} is not at an edge.")
 
-    start_frame, end_frame = _compute_duration_frames(config.duration, total_frames, rng)
+    start_frame, end_frame = _compute_duration_frames(config, total_frames, rng)
     active_frames = end_frame - start_frame
 
     # Control point: perpendicular offset
@@ -308,7 +340,7 @@ def _path_waypoints(config, total_frames, valid_positions, edge_positions,
     if not validate_edge_start(first, edge_positions, water_mask, num_pulses):
         raise ValueError(f"Waypoints start {first} is not at an edge.")
 
-    start_frame, end_frame = _compute_duration_frames(config.duration, total_frames, rng)
+    start_frame, end_frame = _compute_duration_frames(config, total_frames, rng)
     active_frames = end_frame - start_frame
 
     # Build spline
@@ -465,7 +497,7 @@ def _path_equation(config, total_frames, valid_positions, edge_positions,
     if not config.pulse_expr or not config.bin_expr:
         raise ValueError("Equation path requires 'pulse' and 'bin' expressions")
 
-    start_frame, end_frame = _compute_duration_frames(config.duration, total_frames, rng)
+    start_frame, end_frame = _compute_duration_frames(config, total_frames, rng)
     active_frames = end_frame - start_frame
 
     center_pulse = num_pulses // 2

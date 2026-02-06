@@ -5,7 +5,7 @@ from typing import Any, Iterator, List, Optional, Tuple
 
 import numpy as np
 
-from .config import ObjectGroupConfig, PhysicsConfig, SceneConfig
+from .config import ObjectGroupConfig, PhysicsConfig, SceneConfig, resolve_instance_config
 from .intensity import IntensityEngine
 from .motion import generate_path, resolve_position
 from ..core import NUM_RANGE_BINS
@@ -143,16 +143,19 @@ class SceneAdapter:
 
         for group in self.scene.objects:
             for i in range(group.count):
+                inst_path, inst_intensity, inst_flicker, inst_physics, inst_size = \
+                    resolve_instance_config(group, i)
+
                 try:
                     positions, start_frame, end_frame = generate_path(
-                        path_config=group.path,
+                        path_config=inst_path,
                         total_frames=total_frames,
                         valid_positions=self._valid_positions,
                         edge_positions=self._edge_positions,
                         water_mask=self.water_mask,
                         num_pulses=num_pulses,
                         rng=self._rng_adapter,
-                        allow_land=group.path.allow_land,
+                        allow_land=inst_path.allow_land,
                     )
                 except (ValueError, IndexError):
                     continue
@@ -161,13 +164,13 @@ class SceneAdapter:
                     continue
 
                 engine = IntensityEngine(
-                    config=group.intensity,
-                    flicker=group.flicker,
+                    config=inst_intensity,
+                    flicker=inst_flicker,
                     total_frames=total_frames,
                     rng=self._rng_adapter,
                 )
 
-                rcs = _resolve_rcs(group.physics, group.size, self._rng_adapter)
+                rcs = _resolve_rcs(inst_physics, inst_size, self._rng_adapter)
 
                 # Create the PointTarget (position will be updated per frame)
                 first_pos = positions[0]
@@ -176,8 +179,8 @@ class SceneAdapter:
                     range_m=range_m,
                     azimuth_deg=az_deg,
                     mean_rcs_m2=rcs,
-                    swerling_case=SwerlingCase(group.physics.swerling_case),
-                    target_class=group.physics.target_class,
+                    swerling_case=SwerlingCase(inst_physics.swerling_case),
+                    target_class=inst_physics.target_class,
                     target_id=len(self.tracks),
                     speed_mps=0.0,  # Motion handled by adapter, not target
                 )

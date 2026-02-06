@@ -91,12 +91,24 @@ class PathConfig:
     bin_expr: str = ""                 # equation type
     duration: List[float] = field(default_factory=lambda: [0.4, 0.9])
     allow_land: bool = False           # if True, snap to water; if False, truncate path
+    start_frame: Optional[int] = None  # absolute spawn frame
+    end_frame: Optional[int] = None    # absolute despawn frame
 
 
 @dataclass
 class PlacementConfig:
     margin: int = 50
     prefer_edge: bool = False
+
+
+@dataclass
+class InstanceOverride:
+    """Per-instance overrides for an object group."""
+    path_overrides: Dict[str, Any] = field(default_factory=dict)
+    intensity_overrides: Dict[str, Any] = field(default_factory=dict)
+    flicker_overrides: Dict[str, Any] = field(default_factory=dict)
+    physics_overrides: Dict[str, Any] = field(default_factory=dict)
+    size: Any = None
 
 
 @dataclass
@@ -109,6 +121,7 @@ class ObjectGroupConfig:
     path: PathConfig = field(default_factory=PathConfig)
     placement: PlacementConfig = field(default_factory=PlacementConfig)
     physics: PhysicsConfig = field(default_factory=PhysicsConfig)
+    instances: Optional[List['InstanceOverride']] = None
 
 
 @dataclass
@@ -210,6 +223,19 @@ def _parse_intensity(d: Optional[Dict]) -> IntensityConfig:
 def _parse_path(d: Optional[Dict]) -> PathConfig:
     if d is None:
         return PathConfig()
+    sf = d.get("start_frame")
+    ef = d.get("end_frame")
+    if sf is not None:
+        sf = int(sf)
+        if sf < 0:
+            raise ValueError(f"start_frame must be >= 0, got {sf}")
+    if ef is not None:
+        ef = int(ef)
+        if ef < 0:
+            raise ValueError(f"end_frame must be >= 0, got {ef}")
+    if sf is not None and ef is not None and sf >= ef:
+        raise ValueError(f"start_frame ({sf}) must be < end_frame ({ef})")
+
     cfg = PathConfig(
         type=str(d.get("type", "fixed")),
         position=d.get("position", "random"),
@@ -225,6 +251,8 @@ def _parse_path(d: Optional[Dict]) -> PathConfig:
         bin_expr=str(d.get("bin", "")),
         duration=list(d.get("duration", [0.4, 0.9])),
         allow_land=bool(d.get("allow_land", False)),
+        start_frame=sf,
+        end_frame=ef,
     )
     return cfg
 
@@ -238,16 +266,126 @@ def _parse_placement(d: Optional[Dict]) -> PlacementConfig:
     )
 
 
+# Known field sets for routing flat instance overrides
+_PATH_FIELDS = {
+    "type", "position", "start", "end", "heading", "speed", "curvature",
+    "points", "smoothing", "loop", "pulse", "bin", "duration", "allow_land",
+    "start_frame", "end_frame",
+}
+_PHYSICS_FIELDS = {"rcs_m2", "swerling_case", "target_class", "target_height_m"}
+_INTENSITY_FIELDS = {
+    "base", "variability", "profile", "period", "amplitude",
+    "ramp_start", "ramp_end", "expression",
+}
+_FLICKER_FIELDS = {"enabled", "rate", "primary_frames", "flicker_frames", "intensity_drop"}
+
+
+def _parse_instance_override(d: Dict) -> InstanceOverride:
+    """Parse one instance override entry, routing flat keys to correct category."""
+    path_ov = dict(d.get("path", {})) if isinstance(d.get("path"), dict) else {}
+    intensity_ov = dict(d.get("intensity", {})) if isinstance(d.get("intensity"), dict) else {}
+    flicker_ov = dict(d.get("flicker", {})) if isinstance(d.get("flicker"), dict) else {}
+    physics_ov = dict(d.get("physics", {})) if isinstance(d.get("physics"), dict) else {}
+    size = d.get("size")
+
+    # Route flat (non-nested) keys to the correct category
+    nested_keys = {"path", "intensity", "flicker", "physics", "size"}
+    for key, val in d.items():
+        if key in nested_keys:
+            continue
+        if key in _PATH_FIELDS:
+            path_ov.setdefault(key, val)
+        elif key in _PHYSICS_FIELDS:
+            physics_ov.setdefault(key, val)
+        elif key in _INTENSITY_FIELDS:
+            intensity_ov.setdefault(key, val)
+        elif key in _FLICKER_FIELDS:
+            flicker_ov.setdefault(key, val)
+
+    return InstanceOverride(
+        path_overrides=path_ov,
+        intensity_overrides=intensity_ov,
+        flicker_overrides=flicker_ov,
+        physics_overrides=physics_ov,
+        size=size,
+    )
+
+
+def _config_to_dict(cfg) -> Dict[str, Any]:
+    """Convert a dataclass config to a plain dict for overlay merging."""
+    from dataclasses import asdict
+    return asdict(cfg)
+
+
+def _apply_path_overrides(base: PathConfig, overrides: Dict[str, Any]) -> PathConfig:
+    """Merge overrides into a PathConfig by reconstructing via _parse_path."""
+    d = _config_to_dict(base)
+    # Remap internal field names back to YAML keys for _parse_path
+    if "pulse_expr" in d:
+        d["pulse"] = d.pop("pulse_expr")
+    if "bin_expr" in d:
+        d["bin"] = d.pop("bin_expr")
+    d.update(overrides)
+    return _parse_path(d)
+
+
+def _apply_intensity_overrides(base: IntensityConfig, overrides: Dict[str, Any]) -> IntensityConfig:
+    d = _config_to_dict(base)
+    d.update(overrides)
+    return _parse_intensity(d)
+
+
+def _apply_flicker_overrides(base: FlickerConfig, overrides: Dict[str, Any]) -> FlickerConfig:
+    d = _config_to_dict(base)
+    d.update(overrides)
+    return _parse_flicker(d)
+
+
+def _apply_physics_overrides(base: PhysicsConfig, overrides: Dict[str, Any]) -> PhysicsConfig:
+    d = _config_to_dict(base)
+    d.update(overrides)
+    return _parse_physics(d)
+
+
+def resolve_instance_config(group: ObjectGroupConfig, instance_idx: int):
+    """Resolve per-instance config, applying overrides if present.
+
+    Returns: (path, intensity, flicker, physics, size) tuple.
+    """
+    if group.instances is None or instance_idx >= len(group.instances):
+        return group.path, group.intensity, group.flicker, group.physics, group.size
+
+    ov = group.instances[instance_idx]
+    path = _apply_path_overrides(group.path, ov.path_overrides) if ov.path_overrides else group.path
+    intensity = _apply_intensity_overrides(group.intensity, ov.intensity_overrides) if ov.intensity_overrides else group.intensity
+    flicker = _apply_flicker_overrides(group.flicker, ov.flicker_overrides) if ov.flicker_overrides else group.flicker
+    physics = _apply_physics_overrides(group.physics, ov.physics_overrides) if ov.physics_overrides else group.physics
+    size = ov.size if ov.size is not None else group.size
+    return path, intensity, flicker, physics, size
+
+
 def _parse_object_group(d: Dict) -> ObjectGroupConfig:
+    count = int(d.get("count", 1))
+    raw_instances = d.get("instances")
+    instances = None
+    if raw_instances is not None:
+        if len(raw_instances) != count:
+            raise ValueError(
+                f"Object '{d.get('name', '')}': instances list length ({len(raw_instances)}) "
+                f"must match count ({count})"
+            )
+        instances = [_parse_instance_override(inst) for inst in raw_instances]
+
     return ObjectGroupConfig(
         name=str(d.get("name", "")),
-        count=int(d.get("count", 1)),
+        count=count,
         size=d.get("size", "medium"),
         intensity=_parse_intensity(d.get("intensity")),
         flicker=_parse_flicker(d.get("flicker")),
         path=_parse_path(d.get("path")),
         placement=_parse_placement(d.get("placement")),
         physics=_parse_physics(d.get("physics")),
+        instances=instances,
     )
 
 

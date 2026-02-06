@@ -138,7 +138,7 @@ class Tier2Config:
         # Resolve render_mode: "auto" picks based on land type
         render_mode = env.render_mode
         if render_mode == "auto":
-            if land_enabled and env.land.type == "frames":
+            if land_enabled and env.land.land_frames_dir:
                 render_mode = "max_blend"
             else:
                 render_mode = "radar_equation"
