@@ -30,6 +30,7 @@ objects:
       heading: 45
       speed: 0.8
       duration: [0.5, 0.9]
+      allow_land: true
 
   - name: small_boat
     count: 5
@@ -58,6 +59,7 @@ objects:
       speed: 1.5
       curvature: 0.4
       duration: [0.3, 0.7]
+      allow_land: true
 
   - name: navigation_buoy
     count: 3

@@ -314,9 +314,10 @@ class Tier2Pipeline:
         if self.land_mask is None:
             return np.zeros((self.radar.samples_per_revolution, self.radar.num_range_bins))
 
+        base_intensity = 5e-3 if self._land_full_depth else 5e-4
         returns = self.land_generator.generate_land_returns(
             self.land_mask,
-            base_intensity=5e-4,  # Maximum brightness land returns
+            base_intensity=base_intensity,
             full_depth=self._land_full_depth,
         )
         return returns
@@ -462,14 +463,16 @@ class Tier2Pipeline:
         if self.land_mask is not None:
             water_pixels = frame_db[~self.land_mask]
             if water_pixels.size > 0:
-                noise_floor = np.percentile(water_pixels, 85)
+                noise_floor = np.percentile(water_pixels, 65)
             else:
-                noise_floor = np.percentile(frame_db, 85)
+                noise_floor = np.percentile(frame_db, 65)
+            db_range = 35
         else:
             noise_floor = np.percentile(frame_db, 85)
+            db_range = 25
 
         db_min = noise_floor
-        db_max = noise_floor + 25
+        db_max = noise_floor + db_range
 
         frame_norm = np.clip((frame_db - db_min) / (db_max - db_min), 0, 1)
         frame_quantized = np.floor(frame_norm * 15).astype(np.uint8)
