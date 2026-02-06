@@ -31,6 +31,20 @@ class LandGenerator:
 
     def __init__(self, config: LandConfig = None):
         self.config = config or LandConfig()
+        # Override azimuth boundaries (set by auto-detect from mask)
+        self._override_land_start_az: Optional[float] = None
+        self._override_land_end_az: Optional[float] = None
+
+    def set_azimuth_bounds_from_mask(self, land_mask: np.ndarray):
+        """Auto-detect land azimuth extent from a boolean mask and set fade boundaries."""
+        num_az = land_mask.shape[0]
+        land_azimuths = []
+        for az_idx in range(num_az):
+            if np.any(land_mask[az_idx, :]):
+                land_azimuths.append(az_idx / num_az * 360.0)
+        if land_azimuths:
+            self._override_land_start_az = min(land_azimuths)
+            self._override_land_end_az = max(land_azimuths)
 
     def generate_coastline(self, num_azimuths: int, num_range_bins: int,
                            seed: Optional[int] = None) -> np.ndarray:
@@ -87,18 +101,22 @@ class LandGenerator:
         cfg = self.config
         fade_width = 15.0  # degrees to fade over
 
+        # Use overridden bounds (from annotation/mask auto-detect) if available
+        start_az = self._override_land_start_az if self._override_land_start_az is not None else cfg.land_start_az
+        end_az = self._override_land_end_az if self._override_land_end_az is not None else cfg.land_end_az
+
         # Distance from start edge
-        if cfg.land_start_az <= cfg.land_end_az:
-            dist_from_start = az_deg - cfg.land_start_az
-            dist_from_end = cfg.land_end_az - az_deg
+        if start_az <= end_az:
+            dist_from_start = az_deg - start_az
+            dist_from_end = end_az - az_deg
         else:
             # Wrap-around case
-            if az_deg >= cfg.land_start_az:
-                dist_from_start = az_deg - cfg.land_start_az
-                dist_from_end = (360 - az_deg) + cfg.land_end_az
+            if az_deg >= start_az:
+                dist_from_start = az_deg - start_az
+                dist_from_end = (360 - az_deg) + end_az
             else:
-                dist_from_start = (360 - cfg.land_start_az) + az_deg
-                dist_from_end = cfg.land_end_az - az_deg
+                dist_from_start = (360 - start_az) + az_deg
+                dist_from_end = end_az - az_deg
 
         # Fade at edges
         fade = 1.0

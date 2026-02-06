@@ -25,6 +25,10 @@ from .core import (
     RadarConverter,
     ConversionConfig,
     radians_to_ticks,
+    BinaryMask,
+    PolarMask,
+    AnnotationSet,
+    create_water_mask,
 )
 
 # Statistical models
@@ -40,6 +44,9 @@ from .models import (
     LandConfig,
     create_harbor_coastline,
 )
+
+# Scene system
+from .scene import SceneConfig, SceneAdapter, load_scene
 
 
 @dataclass
@@ -106,6 +113,34 @@ class Tier2Config:
             rain_rate_mmhr=data.get('environment', {}).get('rain_rate_mmhr', 0),
             output_dir=Path(data.get('output', {}).get('directory', './output')),
             radar=radar,
+        )
+
+    @classmethod
+    def from_scene(cls, scene_config: SceneConfig) -> 'Tier2Config':
+        """Build Tier2Config from a scene YAML's environment block."""
+        env = scene_config.environment
+        land_enabled = env.land is not None
+        land_config = None
+        if land_enabled and env.land.type == "parametric":
+            land_config = LandConfig(
+                coastline_range=env.land.coastline_range,
+                land_start_az=env.land.land_start_az,
+                land_end_az=env.land.land_end_az,
+                roughness=env.land.roughness,
+                intensity=env.land.intensity,
+                bay_enabled=env.land.bay_enabled,
+                bay_center_az=env.land.bay_center_az,
+                bay_width_az=env.land.bay_width_az,
+                bay_depth=env.land.bay_depth,
+            )
+
+        return cls(
+            num_frames=scene_config.count,
+            seed=scene_config.seed,
+            sea_state=env.sea_state,
+            rain_rate_mmhr=env.rain_rate_mmhr,
+            land_enabled=land_enabled,
+            land_config=land_config,
         )
 
 
@@ -181,8 +216,17 @@ class Tier2Pipeline:
         return np.random.rayleigh(np.sqrt(noise_power / 2), shape)
 
     def add_target(self, frame: np.ndarray, target: PointTarget,
-                   time_s: float, scan_index: int) -> Optional[Dict[str, Any]]:
-        """Add a single target return to the frame."""
+                   time_s: float, scan_index: int,
+                   intensity_scale: float = 1.0) -> Optional[Dict[str, Any]]:
+        """Add a single target return to the frame.
+
+        Args:
+            frame: Radar frame array to modify in-place.
+            target: PointTarget to render.
+            time_s: Current simulation time in seconds.
+            scan_index: Current scan number for Swerling fluctuation.
+            intensity_scale: Multiplier applied after multipath (default 1.0).
+        """
         range_m, az_deg, _ = target.get_position(time_s)
 
         if range_m < 0 or range_m > self.radar.max_range:
@@ -204,6 +248,9 @@ class Tier2Pipeline:
             np.array([range_m]), target_height_m=5.0
         )[0]
         intensity *= np.clip(F4, 0.1, 10.0)  # Limit extreme multipath swings
+
+        # Apply scene intensity scale (from IntensityEngine)
+        intensity *= intensity_scale
 
         range_bin = self.radar.range_to_bin(range_m)
         az_bin = self.radar.azimuth_to_spoke(az_deg)
@@ -377,6 +424,140 @@ class Tier2Pipeline:
 
         print("Done!")
 
+    def _load_annotation_land_mask(self, annotation_path: str, scene_path: Path) -> np.ndarray:
+        """Load annotation.json and convert to polar land mask."""
+        from pathlib import Path as P
+        ann_path = P(annotation_path)
+        if not ann_path.is_absolute():
+            ann_path = (scene_path.parent / ann_path).resolve()
+
+        annotations = AnnotationSet.load(str(ann_path))
+
+        # Create water mask in Cartesian space (same size as converter image)
+        img_size = self.converter.config.image_size
+        water_mask_cart = create_water_mask(annotations, img_size, img_size)
+
+        # Convert to polar
+        polar_water = PolarMask.from_cartesian(water_mask_cart, self.converter)
+
+        # Invert: water mask -> land mask (True where land)
+        land_mask = ~polar_water.data
+
+        return land_mask
+
+    def _load_png_land_mask(self, mask_path: str, scene_path: Path) -> np.ndarray:
+        """Load a PNG water mask and convert to polar land mask."""
+        from pathlib import Path as P
+        from PIL import Image
+
+        mp = P(mask_path)
+        if not mp.is_absolute():
+            mp = (scene_path.parent / mp).resolve()
+
+        img = np.array(Image.open(str(mp)).convert('L'))
+        # Threshold: white = water (True), black = land (False)
+        water_cart = img > 127
+
+        img_size = self.converter.config.image_size
+        # Resize if needed
+        if water_cart.shape[0] != img_size or water_cart.shape[1] != img_size:
+            from PIL import Image as PILImage
+            resized = PILImage.fromarray(water_cart.astype(np.uint8) * 255).resize(
+                (img_size, img_size), PILImage.NEAREST
+            )
+            water_cart = np.array(resized) > 127
+
+        cart_mask = BinaryMask(img_size, img_size)
+        cart_mask.data = water_cart
+        polar_water = PolarMask.from_cartesian(cart_mask, self.converter)
+        land_mask = ~polar_water.data
+
+        return land_mask
+
+    def generate_scene_frame(self, adapter: SceneAdapter,
+                             frame_idx: int, scan_index: int) -> tuple:
+        """Generate one radar frame driven by a SceneAdapter."""
+        frame = self.generate_clutter() + self.generate_noise()
+
+        # Add land returns
+        if self.land_mask is not None:
+            frame += self.generate_land_returns()
+
+        labels = []
+        time_s = frame_idx * self.radar.rotation_period
+
+        for target, intensity_scale in adapter.get_targets_for_frame(frame_idx):
+            label = self.add_target(frame, target, time_s, scan_index,
+                                    intensity_scale=intensity_scale)
+            if label is not None:
+                labels.append(label)
+
+        # Convert to uint8 with 4-bit quantization (same as generate_frame)
+        frame_db = 10 * np.log10(frame + 1e-20)
+        noise_floor = np.percentile(frame_db, 85)
+        db_min = noise_floor
+        db_max = noise_floor + 25
+
+        frame_norm = np.clip((frame_db - db_min) / (db_max - db_min), 0, 1)
+        frame_quantized = np.floor(frame_norm * 15).astype(np.uint8)
+        frame_quantized = (frame_quantized * 17).astype(np.uint8)
+
+        return frame_quantized, labels
+
+    def run_scene(self, scene_config: SceneConfig, scene_path: Path):
+        """Run simulation driven by a scene YAML file."""
+        env = scene_config.environment
+
+        # Handle land loading based on type
+        if env.land is not None:
+            land_type = env.land.type
+
+            if land_type == "parametric":
+                # Already handled by Tier2Config.from_scene -> __init__
+                pass
+            elif land_type == "annotation":
+                land_mask = self._load_annotation_land_mask(
+                    env.land.annotation_path, scene_path)
+                # Build a LandGenerator with default config for statistical rendering
+                land_cfg = LandConfig(intensity=env.land.intensity)
+                self.land_generator = LandGenerator(land_cfg)
+                self.land_generator.set_azimuth_bounds_from_mask(land_mask)
+                self.land_mask = land_mask
+            elif land_type == "mask":
+                land_mask = self._load_png_land_mask(
+                    env.land.mask_path, scene_path)
+                land_cfg = LandConfig(intensity=env.land.intensity)
+                self.land_generator = LandGenerator(land_cfg)
+                self.land_generator.set_azimuth_bounds_from_mask(land_mask)
+                self.land_mask = land_mask
+
+        # Build water mask for the adapter (inverse of land mask)
+        num_pulses = self.radar.samples_per_revolution
+        num_bins = self.radar.num_range_bins
+        water_polar = PolarMask(num_pulses, fill=True)
+        if self.land_mask is not None:
+            water_polar.data = ~self.land_mask
+        else:
+            water_polar.data = np.ones((num_pulses, num_bins), dtype=bool)
+
+        # Build scene adapter
+        rng = np.random.RandomState(scene_config.seed)
+        adapter = SceneAdapter(scene_config, self.radar, water_polar, rng)
+        print(f"Scene: {len(adapter.tracks)} object tracks built")
+
+        self.config.output_dir.mkdir(parents=True, exist_ok=True)
+        total = scene_config.count
+        print(f"Generating {total} scene frames to {self.config.output_dir}")
+
+        for i in range(total):
+            frame, labels = self.generate_scene_frame(adapter, i, scan_index=i)
+            self.write_outputs(frame, labels, i)
+
+            if (i + 1) % 50 == 0:
+                print(f"  Frame {i+1}/{total}")
+
+        print("Done!")
+
 
 def main():
     """Command-line interface."""
@@ -384,6 +565,7 @@ def main():
 
     parser = argparse.ArgumentParser(description='Tier 2 Analytical Radar Simulation')
     parser.add_argument('--config', '-c', type=Path, help='YAML configuration file')
+    parser.add_argument('--scene', type=Path, help='Scene YAML file (unified Tier2/Tier3 format)')
     parser.add_argument('--frames', '-n', type=int, default=100, help='Number of frames')
     parser.add_argument('--sea-state', '-s', type=int, default=3, help='Sea state (0-7)')
     parser.add_argument('--output', '-o', type=Path, default=Path('./output'), help='Output directory')
@@ -391,8 +573,17 @@ def main():
 
     args = parser.parse_args()
 
-    if args.config:
+    if args.scene:
+        scene_config = load_scene(str(args.scene))
+        config = Tier2Config.from_scene(scene_config)
+        if args.output != Path('./output'):
+            config.output_dir = args.output
+        pipeline = Tier2Pipeline(config)
+        pipeline.run_scene(scene_config, args.scene)
+    elif args.config:
         config = Tier2Config.from_yaml(args.config)
+        pipeline = Tier2Pipeline(config)
+        pipeline.run()
     else:
         config = Tier2Config(
             num_frames=args.frames,
@@ -400,9 +591,8 @@ def main():
             output_dir=args.output,
             seed=args.seed,
         )
-
-    pipeline = Tier2Pipeline(config)
-    pipeline.run()
+        pipeline = Tier2Pipeline(config)
+        pipeline.run()
 
 
 if __name__ == '__main__':

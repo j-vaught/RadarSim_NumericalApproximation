@@ -6,6 +6,52 @@ from typing import Any, Dict, List, Optional, Union
 
 
 @dataclass
+class DuctingConfig:
+    enabled: bool = False
+    height_m: float = 50.0
+    strength: float = 0.3
+
+
+@dataclass
+class LandSceneConfig:
+    """Land configuration within the scene environment block."""
+    type: str = "parametric"          # "parametric" | "annotation" | "mask"
+    # Parametric options (existing Tier2 approach)
+    coastline_range: float = 0.6
+    land_start_az: float = 30.0
+    land_end_az: float = 150.0
+    roughness: float = 0.3
+    intensity: float = 0.9
+    bay_enabled: bool = True
+    bay_center_az: float = 90.0
+    bay_width_az: float = 30.0
+    bay_depth: float = 0.15
+    # Annotation option
+    annotation_path: str = ""
+    # Mask option
+    mask_path: str = ""
+
+
+@dataclass
+class EnvironmentConfig:
+    """Environment configuration — Tier2 uses, Tier3 ignores."""
+    sea_state: int = 3
+    wind_speed_mps: float = 12.0
+    rain_rate_mmhr: float = 0.0
+    ducting: DuctingConfig = field(default_factory=DuctingConfig)
+    land: Optional[LandSceneConfig] = None
+
+
+@dataclass
+class PhysicsConfig:
+    """Per-object physics — Tier2 uses, Tier3 ignores."""
+    rcs_m2: Any = None                # float or [min, max]; None = derive from size
+    swerling_case: int = 1            # 0-4
+    target_class: str = "vessel"
+    target_height_m: float = 5.0
+
+
+@dataclass
 class FlickerConfig:
     enabled: bool = False
     rate: float = 0.3
@@ -59,6 +105,7 @@ class ObjectGroupConfig:
     flicker: FlickerConfig = field(default_factory=FlickerConfig)
     path: PathConfig = field(default_factory=PathConfig)
     placement: PlacementConfig = field(default_factory=PlacementConfig)
+    physics: PhysicsConfig = field(default_factory=PhysicsConfig)
 
 
 @dataclass
@@ -73,6 +120,59 @@ class SceneConfig:
     count: int = 200
     objects: List[ObjectGroupConfig] = field(default_factory=list)
     labels: LabelConfig = field(default_factory=LabelConfig)
+    environment: EnvironmentConfig = field(default_factory=EnvironmentConfig)
+
+
+def _parse_ducting(d: Optional[Dict]) -> DuctingConfig:
+    if d is None:
+        return DuctingConfig()
+    return DuctingConfig(
+        enabled=bool(d.get("enabled", False)),
+        height_m=float(d.get("height_m", 50.0)),
+        strength=float(d.get("strength", 0.3)),
+    )
+
+
+def _parse_land_scene(d: Optional[Dict]) -> Optional[LandSceneConfig]:
+    if d is None:
+        return None
+    return LandSceneConfig(
+        type=str(d.get("type", "parametric")),
+        coastline_range=float(d.get("coastline_range", 0.6)),
+        land_start_az=float(d.get("land_start_az", 30.0)),
+        land_end_az=float(d.get("land_end_az", 150.0)),
+        roughness=float(d.get("roughness", 0.3)),
+        intensity=float(d.get("intensity", 0.9)),
+        bay_enabled=bool(d.get("bay_enabled", True)),
+        bay_center_az=float(d.get("bay_center_az", 90.0)),
+        bay_width_az=float(d.get("bay_width_az", 30.0)),
+        bay_depth=float(d.get("bay_depth", 0.15)),
+        annotation_path=str(d.get("annotation_path", "")),
+        mask_path=str(d.get("mask_path", "")),
+    )
+
+
+def _parse_environment(d: Optional[Dict]) -> EnvironmentConfig:
+    if d is None:
+        return EnvironmentConfig()
+    return EnvironmentConfig(
+        sea_state=int(d.get("sea_state", 3)),
+        wind_speed_mps=float(d.get("wind_speed_mps", 12.0)),
+        rain_rate_mmhr=float(d.get("rain_rate_mmhr", 0.0)),
+        ducting=_parse_ducting(d.get("ducting")),
+        land=_parse_land_scene(d.get("land")),
+    )
+
+
+def _parse_physics(d: Optional[Dict]) -> PhysicsConfig:
+    if d is None:
+        return PhysicsConfig()
+    return PhysicsConfig(
+        rcs_m2=d.get("rcs_m2"),
+        swerling_case=int(d.get("swerling_case", 1)),
+        target_class=str(d.get("target_class", "vessel")),
+        target_height_m=float(d.get("target_height_m", 5.0)),
+    )
 
 
 def _parse_flicker(d: Optional[Dict]) -> FlickerConfig:
@@ -142,6 +242,7 @@ def _parse_object_group(d: Dict) -> ObjectGroupConfig:
         flicker=_parse_flicker(d.get("flicker")),
         path=_parse_path(d.get("path")),
         placement=_parse_placement(d.get("placement")),
+        physics=_parse_physics(d.get("physics")),
     )
 
 
@@ -168,4 +269,5 @@ def load_scene(path: str) -> SceneConfig:
         count=int(raw.get("count", 200)),
         objects=objects,
         labels=_parse_labels(raw.get("labels")),
+        environment=_parse_environment(raw.get("environment")),
     )
