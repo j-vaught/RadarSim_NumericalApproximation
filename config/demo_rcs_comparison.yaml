@@ -1,0 +1,65 @@
+# RCS comparison — all vessels at same speed, different RCS values
+# Watch how brightness changes with range for each RCS class
+seed: 77
+count: 200
+
+environment:
+  sea_state: 3
+  wind_speed_mps: 10
+  rain_rate_mmhr: 0
+  land:
+    type: frames
+    land_frames_dir: ../../Tier3/radar-scene-augmentation/data/land_frames
+    annotation_path: ../../Tier3/radar-scene-augmentation/data/annotation.json
+
+objects:
+  - name: rcs_comparison
+    count: 5
+    size: medium
+    physics:
+      rcs_m2: 100
+      swerling_case: 0        # no fluctuation — clean range-dependent falloff
+      target_class: vessel
+      target_height_m: 5.0
+    intensity:
+      base: 1.0
+      variability: 0.0
+      profile: constant
+    path:
+      type: linear
+      start: edge
+      heading: 45
+      speed: 0.8
+      duration: [0.8, 0.9]
+      allow_land: true
+    instances:
+      # tiny target — 1 m² (small buoy / debris)
+      - heading: 15
+        start_frame: 0
+        physics:
+          rcs_m2: 1
+      # small target — 10 m² (small boat)
+      - heading: 35
+        start_frame: 0
+        physics:
+          rcs_m2: 10
+      # medium target — 50 m² (fishing vessel)
+      - heading: 55
+        start_frame: 0
+        physics:
+          rcs_m2: 50
+      # large target — 200 m² (cargo ship)
+      - heading: 75
+        start_frame: 0
+        physics:
+          rcs_m2: 200
+      # very large target — 800 m² (tanker)
+      - heading: 95
+        start_frame: 0
+        physics:
+          rcs_m2: 800
+
+labels:
+  export: true
+  class_map:
+    vessel: 0
