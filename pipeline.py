@@ -168,8 +168,11 @@ class Tier2Pipeline:
         self.config = config
         self.radar = config.radar
 
+        # Initialize random state
         if config.seed is not None:
-            np.random.seed(config.seed)
+            self.rng = np.random.RandomState(config.seed)
+        else:
+            self.rng = np.random.RandomState()
 
         # Initialize models
         self.clutter_model = SeaClutterModel(sea_state=config.sea_state)
@@ -224,7 +227,7 @@ class Tier2Pipeline:
         """Generate thermal noise floor."""
         shape = (self.radar.samples_per_revolution, self.radar.num_range_bins)
         noise_power = self.radar.thermal_noise_power
-        return np.random.rayleigh(np.sqrt(noise_power / 2), shape)
+        return self.rng.rayleigh(np.sqrt(noise_power / 2), shape)
 
     def add_target(self, frame: np.ndarray, target: PointTarget,
                    time_s: float, scan_index: int,
@@ -268,29 +271,29 @@ class Tier2Pipeline:
 
         # Minimum blob size + scaling with RCS
         min_blob = 4  # Minimum radar return size
-        base_size = max(min_blob, int(np.sqrt(rcs) * 1.2)) + np.random.randint(0, 3)
+        base_size = max(min_blob, int(np.sqrt(rcs) * 1.2)) + self.rng.randint(0, 3)
 
         # In Cartesian, azimuth spread = range * delta_angle
         # To look circular, reduce azimuth bins at longer ranges
         range_norm = range_bin / self.radar.num_range_bins
         az_scale = max(0.4, 1.0 - range_norm * 0.6)  # Shrink azimuth at longer range
 
-        blob_size_r = base_size + np.random.randint(0, 4)
+        blob_size_r = base_size + self.rng.randint(0, 4)
         blob_size_az = max(2, int(base_size * az_scale))
 
         # Add some irregularity
         for da in range(-blob_size_az - 1, blob_size_az + 2):
             for dr in range(-blob_size_r - 1, blob_size_r + 2):
                 # Irregular blob boundary
-                az_radius = blob_size_az * (0.8 + 0.4 * np.random.random())
-                r_radius = blob_size_r * (0.8 + 0.4 * np.random.random())
+                az_radius = blob_size_az * (0.8 + 0.4 * self.rng.random())
+                r_radius = blob_size_r * (0.8 + 0.4 * self.rng.random())
 
                 dist_sq = (da / max(az_radius, 0.5))**2 + (dr / max(r_radius, 0.5))**2
                 if dist_sq > 1.0:
                     continue
 
                 # Soft falloff with speckle
-                weight = np.exp(-2.0 * dist_sq) * (0.5 + 0.5 * np.random.random())
+                weight = np.exp(-2.0 * dist_sq) * (0.5 + 0.5 * self.rng.random())
 
                 ai = (az_bin + da) % self.radar.samples_per_revolution
                 ri = range_bin + dr
@@ -319,6 +322,7 @@ class Tier2Pipeline:
             self.land_mask,
             base_intensity=base_intensity,
             full_depth=self._land_full_depth,
+            rng=self.rng,
         )
         return returns
 

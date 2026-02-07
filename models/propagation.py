@@ -229,6 +229,9 @@ class DuctingModel:
     Simplified atmospheric ducting model.
 
     Models anomalous propagation due to temperature inversions.
+
+    NOTE: Currently unused in Tier2 pipeline, but kept as a potentially
+    useful extension for future atmospheric propagation modeling.
     """
 
     def __init__(self,

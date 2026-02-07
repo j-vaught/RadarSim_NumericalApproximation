@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tier2-radar"
+version = "1.0.0"
+description = "Analytical/statistical synthetic X-band marine radar data generation using numerical approximation methods"
+authors = [
+    {name = "J.C. Vaught", email = "jvaught@sc.edu"}
+]
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "Pillow>=9.0",
+    "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+viz = [
+    "matplotlib>=3.5",
+]
+
+[project.scripts]
+tier2-radar = "pipeline:main"

@@ -7,24 +7,8 @@ from typing import Any, List, Optional, Tuple
 import numpy as np
 
 from .config import PathConfig
+from .expressions import safe_eval
 from ..core import NUM_RANGE_BINS
-
-# Safe math namespace for eval expressions
-_SAFE_MATH = {
-    "sin": math.sin, "cos": math.cos, "tan": math.tan,
-    "sqrt": math.sqrt, "abs": abs, "pi": math.pi,
-    "min": min, "max": max, "log": math.log, "exp": math.exp,
-}
-
-
-def safe_eval(expression: str, variables: dict) -> float:
-    """Evaluate a math expression with whitelisted functions and variables."""
-    ns = dict(_SAFE_MATH)
-    ns.update(variables)
-    try:
-        return float(eval(expression, {"__builtins__": {}}, ns))
-    except Exception as e:
-        raise ValueError(f"Failed to evaluate expression '{expression}': {e}")
 
 
 def eval_speed(speed_spec: Any, t: int) -> float:

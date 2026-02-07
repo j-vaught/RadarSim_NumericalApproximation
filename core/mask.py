@@ -161,7 +161,7 @@ class PolarMask:
             unique_angles=list(frame.unique_angles),
         )
         for pulse in frame.pulses:
-            new_pulse = Pulse_copy(pulse)
+            new_pulse = pulse_copy(pulse)
             pulse_idx = int((pulse.angle_rad / (2.0 * math.pi)) * self.num_pulses) % self.num_pulses
 
             for bin_idx in range(len(new_pulse.echoes)):
@@ -174,7 +174,8 @@ class PolarMask:
         return new_frame
 
 
-def Pulse_copy(pulse):
+def pulse_copy(pulse):
+    """Create a copy of a Pulse with copied echoes array."""
     from .csv_handler import Pulse
     return Pulse(
         status=pulse.status,

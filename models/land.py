@@ -54,8 +54,7 @@ class LandGenerator:
         Returns:
             Boolean mask where True = land, shape (num_azimuths, num_range_bins)
         """
-        if seed is not None:
-            np.random.seed(seed)
+        rng = np.random.RandomState(seed) if seed is not None else np.random.RandomState()
 
         cfg = self.config
         mask = np.zeros((num_azimuths, num_range_bins), dtype=bool)
@@ -64,7 +63,7 @@ class LandGenerator:
         base_range = int(cfg.coastline_range * num_range_bins)
 
         # Generate fractal coastline variation
-        coastline = self._generate_fractal_coastline(num_azimuths, cfg.roughness)
+        coastline = self._generate_fractal_coastline(num_azimuths, cfg.roughness, rng)
         coastline = coastline * num_range_bins * 0.15  # Scale roughness
 
         for az_idx in range(num_azimuths):
@@ -146,7 +145,7 @@ class LandGenerator:
 
         return coast_dist
 
-    def _generate_fractal_coastline(self, length: int, roughness: float) -> np.ndarray:
+    def _generate_fractal_coastline(self, length: int, roughness: float, rng: np.random.RandomState) -> np.ndarray:
         """Generate fractal coastline with organic blobby variation."""
         from scipy.ndimage import gaussian_filter
 
@@ -156,15 +155,15 @@ class LandGenerator:
         for octave in range(6):
             freq = 2 ** octave
             amp = roughness / (octave + 0.5)
-            phase = np.random.random() * 2 * np.pi
+            phase = rng.random() * 2 * np.pi
             coastline += amp * np.sin(np.linspace(0, freq * 2 * np.pi, length) + phase)
 
         # Add medium-scale bumps (blobby protrusions)
-        num_bumps = np.random.randint(3, 8)
+        num_bumps = rng.randint(3, 8)
         for _ in range(num_bumps):
-            center = np.random.randint(0, length)
-            width = np.random.randint(20, 60)
-            height = np.random.randn() * roughness * 0.8
+            center = rng.randint(0, length)
+            width = rng.randint(20, 60)
+            height = rng.randn() * roughness * 0.8
             bump = height * np.exp(-0.5 * ((np.arange(length) - center) / width) ** 2)
             coastline += bump
 
@@ -175,7 +174,8 @@ class LandGenerator:
 
     def generate_land_returns(self, land_mask: np.ndarray,
                                base_intensity: float = 1e-6,
-                               full_depth: bool = False) -> np.ndarray:
+                               full_depth: bool = False,
+                               rng: Optional[np.random.RandomState] = None) -> np.ndarray:
         """
         Generate radar returns from land.
 
@@ -185,11 +185,15 @@ class LandGenerator:
             full_depth: If True, render all land pixels with range-based
                         falloff instead of a hard shadow depth cutoff.
                         Use for annotation/mask-sourced land geometry.
+            rng: Random state for reproducibility (uses new RandomState if None)
 
         Returns:
             Intensity array for land returns
         """
         from scipy.ndimage import gaussian_filter
+
+        if rng is None:
+            rng = np.random.RandomState()
 
         cfg = self.config
         num_az, num_range = land_mask.shape
@@ -204,7 +208,7 @@ class LandGenerator:
             # Per-azimuth speckle texture (multi-scale noise)
             texture = np.ones((num_az, num_range), dtype=float)
             for scale in [3, 8, 20]:
-                noise = np.random.randn(num_az, num_range) * 0.15
+                noise = rng.randn(num_az, num_range) * 0.15
                 texture += gaussian_filter(noise, sigma=(scale, scale * 0.8))
             texture = np.clip(texture, 0.3, 1.5)
 
@@ -231,21 +235,21 @@ class LandGenerator:
                     returns[az, r_bin] = intensity
         else:
             # Original depth-limited rendering for parametric coastlines
-            base_depth = np.random.randint(90, 130)
+            base_depth = rng.randint(90, 130)
 
             depth_variation = np.zeros(num_az)
             for scale in [60, 30, 15]:
                 freq = num_az / scale
-                phase = np.random.random() * 2 * np.pi
+                phase = rng.random() * 2 * np.pi
                 amp = 20 * (scale / 60)
                 depth_variation += amp * np.sin(
                     np.linspace(0, freq * 2 * np.pi, num_az) + phase)
 
-            num_bumps = np.random.randint(4, 10)
+            num_bumps = rng.randint(4, 10)
             for _ in range(num_bumps):
-                center = np.random.randint(0, num_az)
-                width = np.random.randint(15, 50)
-                height = np.random.randn() * 25
+                center = rng.randint(0, num_az)
+                width = rng.randint(15, 50)
+                height = rng.randn() * 25
                 bump = height * np.exp(
                     -0.5 * ((np.arange(num_az) - center) / width) ** 2)
                 depth_variation += bump
@@ -312,8 +316,9 @@ def create_peninsula_coastline(num_azimuths: int = 720, num_range_bins: int = 86
 
 def create_island(num_azimuths: int = 720, num_range_bins: int = 868,
                   center_az: float = 180.0, center_range: float = 0.4,
-                  size: float = 0.1) -> np.ndarray:
+                  size: float = 0.1, seed: Optional[int] = None) -> np.ndarray:
     """Create a small island."""
+    rng = np.random.RandomState(seed) if seed is not None else np.random.RandomState()
     mask = np.zeros((num_azimuths, num_range_bins), dtype=bool)
 
     center_r_bin = int(center_range * num_range_bins)
@@ -327,7 +332,7 @@ def create_island(num_azimuths: int = 720, num_range_bins: int = 868,
         for dr in range(-r_radius, r_radius + 1):
             # Elliptical shape with noise
             dist = np.sqrt((da / max(az_radius, 1))**2 + (dr / max(r_radius, 1))**2)
-            if dist < 0.8 + 0.2 * np.random.random():
+            if dist < 0.8 + 0.2 * rng.random():
                 az_idx = (az_center_idx + da) % num_azimuths
                 r_idx = center_r_bin + dr
                 if 0 <= r_idx < num_range_bins:

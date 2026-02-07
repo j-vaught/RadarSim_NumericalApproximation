@@ -17,7 +17,8 @@ from .config import (
     load_scene,
 )
 from .intensity import IntensityEngine, scale_echo_data
-from .motion import generate_path, safe_eval, eval_speed, resolve_position
+from .motion import generate_path, eval_speed, resolve_position
+from .expressions import safe_eval
 from .adapter import SceneAdapter, NumpyRngAdapter, SceneTrack
 
 __all__ = [

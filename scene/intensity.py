@@ -4,19 +4,7 @@ import math
 from typing import List
 
 from .config import FlickerConfig, IntensityConfig
-
-
-_SAFE_MATH = {
-    "sin": math.sin, "cos": math.cos, "tan": math.tan,
-    "sqrt": math.sqrt, "abs": abs, "pi": math.pi,
-    "min": min, "max": max, "log": math.log, "exp": math.exp,
-}
-
-
-def _safe_eval(expression: str, variables: dict) -> float:
-    ns = dict(_SAFE_MATH)
-    ns.update(variables)
-    return float(eval(expression, {"__builtins__": {}}, ns))
+from .expressions import safe_eval
 
 
 class IntensityEngine:
@@ -67,7 +55,7 @@ class IntensityEngine:
         elif cfg.profile == "sine":
             value = cfg.base + cfg.amplitude * math.sin(2.0 * math.pi * frame_idx / cfg.period)
         elif cfg.profile == "custom":
-            value = _safe_eval(cfg.expression, {"t": frame_idx})
+            value = safe_eval(cfg.expression, {"t": frame_idx})
         else:
             value = cfg.base
 
