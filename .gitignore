@@ -36,6 +36,7 @@ wheels/
 # OS
 .DS_Store
 Thumbs.db
+._*
 
 # Jupyter
 .ipynb_checkpoints/
@@ -44,3 +45,6 @@ Thumbs.db
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Generated output
+output/

@@ -1,16 +1,13 @@
 # Speed comparison — all vessels have identical RCS (100 m²)
-# 5 vessels at different speeds moving across the water
+# 5 vessels moving outward from radar center at different speeds
 seed: 99
 count: 200
 
 environment:
-  sea_state: 3
+  sea_state: 5
   wind_speed_mps: 10
   rain_rate_mmhr: 0
-  land:
-    type: frames
-    land_frames_dir: ../../Tier3/radar-scene-augmentation/data/land_frames
-    annotation_path: ../../Tier3/radar-scene-augmentation/data/annotation.json
+  render_mode: radar_equation
 
 objects:
   - name: speed_comparison
@@ -18,35 +15,35 @@ objects:
     size: medium
     physics:
       rcs_m2: 100
-      swerling_case: 0        # no fluctuation so brightness is purely range-dependent
+      swerling_case: 0
       target_class: vessel
       target_height_m: 5.0
     intensity:
       base: 1.0
-      variability: 0.0        # no randomness — clean comparison
+      variability: 0.0
       profile: constant
     path:
       type: linear
-      start: edge
-      heading: 45
+      start: [0, 40]
+      heading: 180
       speed: 1.0
-      duration: [0.8, 0.9]
-      allow_land: true
+      duration: [0.9, 0.95]
     instances:
-      - speed: 0.3
-        heading: 20
+      # Spread evenly around azimuth, all heading outward
+      - start: [0, 40]
+        speed: 0.3
         start_frame: 0
-      - speed: 0.6
-        heading: 40
+      - start: [144, 40]
+        speed: 0.6
         start_frame: 0
-      - speed: 1.0
-        heading: 60
+      - start: [288, 40]
+        speed: 1.0
         start_frame: 0
-      - speed: 1.5
-        heading: 80
+      - start: [432, 40]
+        speed: 1.5
         start_frame: 0
-      - speed: 2.2
-        heading: 100
+      - start: [576, 40]
+        speed: 2.2
         start_frame: 0
 
 labels:

@@ -1,16 +1,13 @@
 # RCS comparison — all vessels at same speed, different RCS values
-# Watch how brightness changes with range for each RCS class
+# Watch brightness change as targets move outward from radar (R^4 falloff)
 seed: 77
 count: 200
 
 environment:
-  sea_state: 3
+  sea_state: 5
   wind_speed_mps: 10
   rain_rate_mmhr: 0
-  land:
-    type: frames
-    land_frames_dir: ../../Tier3/radar-scene-augmentation/data/land_frames
-    annotation_path: ../../Tier3/radar-scene-augmentation/data/annotation.json
+  render_mode: radar_equation
 
 objects:
   - name: rcs_comparison
@@ -18,7 +15,7 @@ objects:
     size: medium
     physics:
       rcs_m2: 100
-      swerling_case: 0        # no fluctuation — clean range-dependent falloff
+      swerling_case: 0
       target_class: vessel
       target_height_m: 5.0
     intensity:
@@ -27,34 +24,33 @@ objects:
       profile: constant
     path:
       type: linear
-      start: edge
-      heading: 45
+      start: [0, 40]
+      heading: 180
       speed: 0.8
-      duration: [0.8, 0.9]
-      allow_land: true
+      duration: [0.9, 0.95]
     instances:
-      # tiny target — 1 m² (small buoy / debris)
-      - heading: 15
+      # 1 m² — buoy / debris
+      - start: [0, 40]
         start_frame: 0
         physics:
           rcs_m2: 1
-      # small target — 10 m² (small boat)
-      - heading: 35
+      # 10 m² — small boat
+      - start: [144, 40]
         start_frame: 0
         physics:
           rcs_m2: 10
-      # medium target — 50 m² (fishing vessel)
-      - heading: 55
+      # 50 m² — fishing vessel
+      - start: [288, 40]
         start_frame: 0
         physics:
           rcs_m2: 50
-      # large target — 200 m² (cargo ship)
-      - heading: 75
+      # 200 m² — cargo ship
+      - start: [432, 40]
         start_frame: 0
         physics:
           rcs_m2: 200
-      # very large target — 800 m² (tanker)
-      - heading: 95
+      # 800 m² — tanker
+      - start: [576, 40]
         start_frame: 0
         physics:
           rcs_m2: 800
